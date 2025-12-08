@@ -1,0 +1,219 @@
+R script for Nucleotide diversity analysis
+
+############################################################
+## 0. Load packages
+############################################################
+library(readxl)   # read Excel
+library(dplyr)    # data wrangling
+library(ggplot2)  # plotting
+library(grid)     # arrow()
+
+############################################################
+## 1. Import nucleotide diversity table from Excel
+############################################################
+# EDIT: set the path to your Excel file and sheet name
+excel_file  <- "beta_tubulin_nucdiv.xlsx"
+sheet_name  <- 1   # or "Sheet1"
+
+df <- read_excel(excel_file, sheet = sheet_name) %>%
+  # EDIT: rename columns to match your actual column names
+  rename(
+    genome_pos = genome_pos,   # position in AF034219.1
+    pi         = pi            # nucleotide diversity at each site
+  ) %>%
+  arrange(genome_pos)
+
+# Sanity check
+str(df)
+max_pi <- max(df$pi, na.rm = TRUE)
+
+
+############################################################
+## 2. Define gene structure: exons & introns
+############################################################
+# IMPORTANT:
+# Replace the start/end coordinates below with the ones you used
+# for AF034219.1 (β-tubulin isotype-1). y-values control the
+# vertical position of the gene track.
+
+exons <- tribble(
+  ~start, ~end,  ~ymin,    ~ymax,
+  #  ----- EDIT THESE GENOMIC COORDINATES -----
+  299,    486,   -0.00005,  0.00005,  # Exon 1
+  681,    760,   -0.00005,  0.00005,  # Exon 2
+  1000,   1200,  -0.00005,  0.00005,  # Exon 3
+  1300,   1450,  -0.00005,  0.00005,  # Exon 4
+  1700,   1850,  -0.00005,  0.00005,  # Exon 5
+  1950,   2100,  -0.00005,  0.00005   # Exon 6
+)
+
+introns <- tribble(
+  ~start, ~end,  ~ymin,    ~ymax,
+  # ---- EDIT TO MATCH TRUE INTRON BOUNDS ----
+  487,    680,   -0.00005,  0.00005,  # Intron 1
+  761,    999,   -0.00005,  0.00005,  # Intron 2
+  1201,   1299,  -0.00005,  0.00005,  # Intron 3
+  1451,   1699,  -0.00005,  0.00005,  # Intron 4
+  1851,   1949,  -0.00005,  0.00005   # Intron 5
+)
+
+# Label exons Exon 1...Exon 6 (for plotting)
+exons$exon_label <- paste0("Exon ", seq_len(nrow(exons)))
+
+
+############################################################
+## 3. Build CDS-to-genome mapping
+############################################################
+# Assuming CDS spans all exons given above (no UTR inside exons).
+# This creates a vector where index = CDS base position (1..CDS_len),
+# value = genomic coordinate in AF034219.1.
+
+cds_to_genome <- unlist(
+  mapply(function(s, e) seq(s, e),
+         exons$start, exons$end,
+         SIMPLIFY = FALSE)
+)
+
+# Check CDS length
+cds_length <- length(cds_to_genome)
+cds_length
+
+
+############################################################
+## 4. Mutation positions (canonical + novel)
+############################################################
+# Codon numbers in CDS (1-based)
+codons <- c(167, 198, 200, 308, 352)
+
+# Use the middle base of each codon (CDS coordinates)
+codon_cds_pos    <- codons * 3 - 1
+codon_genome_pos <- cds_to_genome[codon_cds_pos]
+
+mut_df <- data.frame(
+  label = factor(
+    c("F167", "E198", "F200", "G308W", "A352D"),
+    levels = c("F167", "E198", "F200", "G308W", "A352D")
+  ),
+  pos = codon_genome_pos
+)
+
+
+############################################################
+## 5. UTR coordinates (bottom band)
+############################################################
+# EDIT: adjust 5' and 3' UTR coordinates to your annotation
+utr5 <- data.frame(
+  start = 1,
+  end   = 298,
+  ymin  = -0.0005,
+  ymax  = 0
+)
+
+utr3 <- data.frame(
+  start = 2129,
+  end   = max(df$genome_pos),
+  ymin  = -0.0005,
+  ymax  = 0
+)
+
+
+############################################################
+## 6. Final nucleotide diversity plot
+############################################################
+
+ggplot() +
+  ## --- UTR regions ---
+  geom_rect(data = utr5,
+            aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax,
+                fill = "5' UTR"),
+            alpha = 0.7) +
+  geom_rect(data = utr3,
+            aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax,
+                fill = "3' UTR"),
+            alpha = 0.7) +
+  
+  ## --- Introns ---
+  geom_rect(data = introns,
+            aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax,
+                fill = "Intron"),
+            alpha = 0.7) +
+  
+  ## --- Exons ---
+  geom_rect(data = exons,
+            aes(xmin = start, xmax = end, ymin = ymin, ymax = ymax,
+                fill = "Exon"),
+            alpha = 0.9) +
+  
+  ## --- Exon labels ---
+  geom_text(
+    data = exons,
+    aes(
+      x     = (start + end) / 2,
+      y     = (ymin + ymax) / 2,
+      label = exon_label
+    ),
+    color = "white",
+    size = 3,
+    fontface = "bold"
+  ) +
+  
+  ## --- π stems & points ---
+  geom_segment(data = df,
+               aes(x = genome_pos, xend = genome_pos, y = 0, yend = pi),
+               color = "black",
+               linewidth = 0.4) +
+  geom_point(
+    data = df,
+    aes(x = genome_pos, y = pi),
+    size = 1.3,
+    color = "black"
+  ) +
+  
+  ## --- Mutation arrows (from white space up to exon bases) ---
+  geom_segment(
+    data = mut_df,
+    aes(
+      x     = pos,
+      xend  = pos,
+      y     = -0.00085,    # tail deep in white space
+      yend  = -0.00002,    # arrowhead just under exon (y ~ 0)
+      colour = label
+    ),
+    arrow = arrow(length = unit(0.25, "cm"), ends = "last", type = "closed"),
+    linewidth = 1.0
+  ) +
+  
+  ## --- Legends & scales ---
+  scale_fill_manual(
+    name = "Gene structure",
+    values = c(
+      "Exon"   = "steelblue",
+      "Intron" = "grey80",
+      "5' UTR" = "lightgreen",
+      "3' UTR" = "palegreen3"
+    )
+  ) +
+  scale_colour_manual(
+    name   = "Mutation site",
+    values = c(
+      "F167"  = "red3",
+      "E198"  = "blue3",
+      "F200"  = "goldenrod3",
+      "G308W" = "forestgreen",
+      "A352D" = "purple4"
+    ),
+    labels = c(
+      "F167"  = "F167 (Canonical)",
+      "E198"  = "E198 (Canonical)",
+      "F200"  = "F200 (Canonical)",
+      "G308W" = "G308W (Novel)",
+      "A352D" = "A352D (Novel)"
+    )
+  ) +
+  
+  coord_cartesian(ylim = c(-0.0009, max_pi * 1.15)) +
+  theme_bw() +
+  labs(
+    x = "Genomic position on AF034219.1 (bp)",
+    y = "Nucleotide diversity (π)"
+  )
