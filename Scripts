@@ -1,1 +1,99 @@
-scripts/README.md
+# ------------------------------------------------------------------
+# Plot docking scores for benzimidazoles against Trichuris β-tubulin
+# ------------------------------------------------------------------
+# - Input: hard-coded table of docking scores
+# - Output: ggplot objects for Vina 28 Å and GNINA 28 Å scores
+# ------------------------------------------------------------------
+
+library(tidyverse)
+
+# --------------------- 1. Data ------------------------------------
+
+docking <- tribble(
+  ~Mutation, ~Ligand, ~VINA24, ~VINA28, ~VINA32, ~GNINA28,
+  "WT",    "ALBZ", -4.955, -5.351, -5.632, -5.36,
+  "WT",    "MBZ",  -5.928, -6.167, -6.625, -6.39,
+  "WT",    "OXFZ", -5.993, -6.031, -6.169, -6.41,
+  "F167Y", "ALBZ", -4.963, -5.361, -5.616, -5.38,
+  "F167Y", "MBZ",  -5.907, -6.202, -7.453, -6.36,
+  "F167Y", "OXFZ", -5.945, -5.974, -6.581, -6.41,
+  "E198A", "ALBZ", -4.899, -5.333, -5.558, -5.29,
+  "E198A", "MBZ",  -5.935, -6.191, -6.611, -6.12,
+  "E198A", "OXFZ", -5.972, -6.028, -6.159, -6.27,
+  "F200Y", "ALBZ", -4.937, -5.356, -5.756, -5.39,
+  "F200Y", "MBZ",  -5.916, -6.157, -6.669, -6.37,
+  "F200Y", "OXFZ", -5.947, -6.015, -6.193, -6.31,
+  "G308W", "ALBZ", -4.944, -5.374, -5.699, -5.47,
+  "G308W", "MBZ",  -5.921, -6.142, -7.377, -6.36,
+  "G308W", "OXFZ", -5.972, -6.025, -6.204, -6.34,
+  "A352D", "ALBZ", -4.921, -5.340, -5.810, -5.36,
+  "A352D", "MBZ",  -5.896, -6.133, -6.503, -6.30,
+  "A352D", "OXFZ", -5.948, -6.012, -6.031, -6.35
+)
+
+# Tidy labels and factor ordering
+docking <- docking %>%
+  mutate(
+    Ligand = recode(
+      Ligand,
+      "ALBZ" = "Albendazole",
+      "MBZ"  = "Mebendazole",
+      "OXFZ" = "Oxfendazole"
+    ),
+    Mutation = factor(
+      Mutation,
+      levels = c("WT", "F167Y", "E198A", "F200Y", "G308W", "A352D")
+    )
+  )
+
+ligand_palette <- c(
+  "Albendazole" = "#4C9BE8",
+  "Mebendazole" = "#E68A2E",
+  "Oxfendazole" = "#4CAF50"
+)
+
+# --------------------- 2. Vina 28 Å barplot -----------------------
+
+vina28_plot <- ggplot(docking, aes(x = Mutation, y = VINA28, fill = Ligand)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_text(
+    aes(label = sprintf("%.2f", VINA28)),
+    position = position_dodge(width = 0.8),
+    vjust = 1.5,
+    size = 3.5
+  ) +
+  scale_fill_manual(values = ligand_palette) +
+  scale_y_continuous(limits = c(-7.5, 0)) +
+  theme_bw(base_size = 14) +
+  labs(
+    x = "β-tubulin variant",
+    y = "Binding affinity (kcal/mol)",
+    fill = "Ligand",
+    title = "Vina 28 Å docking scores"
+  )
+
+# print(vina28_plot)      # uncomment to display
+# ggsave("vina28_docking_barplot.png", vina28_plot, width = 8, height = 4)
+
+# --------------------- 3. GNINA 28 Å barplot ----------------------
+
+gnina28_plot <- ggplot(docking, aes(x = Mutation, y = GNINA28, fill = Ligand)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_text(
+    aes(label = sprintf("%.2f", GNINA28)),
+    position = position_dodge(width = 0.8),
+    vjust = 1.5,
+    size = 3.5
+  ) +
+  scale_fill_manual(values = ligand_palette) +
+  scale_y_continuous(limits = c(-7.5, 0)) +
+  theme_bw(base_size = 14) +
+  labs(
+    x = "β-tubulin variant",
+    y = "Binding affinity (kcal/mol)",
+    fill = "Ligand",
+    title = "GNINA 28 Å docking scores"
+  )
+
+# print(gnina28_plot)     # uncomment to display
+# ggsave("gnina28_docking_barplot.png", gnina28_plot, width = 8, height = 4)
