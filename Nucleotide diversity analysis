@@ -1,0 +1,129 @@
+#!/usr/bin/env Rscript
+
+# ============================================================
+# Nucleotide diversity (π), pairwise divergence (Dxy),
+# and net divergence (Da) for ITS sequences of
+# Trichuris trichiura and T. incognita
+#
+# Requirements:
+#   - Alignment in FASTA format (ITS_alignment.fasta)
+#   - Packages: ape, pegas, dplyr, tibble, readr (optional)
+#
+# Output:
+#   - Summary table of π, Dxy, Da written to CSV
+# ============================================================
+
+library(ape)
+library(pegas)
+library(dplyr)
+library(tibble)
+library(readr)
+
+# ------------------ 1. Input files --------------------------
+
+# Path to aligned ITS sequences (FASTA)
+aln_file <- "data/ITS_alignment.fasta"   # <- adjust path as needed
+
+# Read alignment as DNA object
+its_aln <- read.dna(aln_file, format = "fasta")
+
+# Inspect sequence names to define groups
+seq_names <- rownames(its_aln)
+print(seq_names)
+
+# ------------------ 2. Define groups ------------------------
+# Edit these to match your actual labels in `seq_names`.
+
+# Example:
+#   Korean T. trichiura sequences contain "KOR"
+#   T. incognita sequences contain "TINCO"
+#   Reference T. trichiura contains "REF"
+
+group_labels <- case_when(
+  grepl("KOR",  seq_names, ignore.case = TRUE) ~ "Korean_Ttrichiura",
+  grepl("TINCO",seq_names, ignore.case = TRUE) ~ "T_incognita",
+  grepl("REF",  seq_names, ignore.case = TRUE) ~ "Reference",
+  TRUE                                        ~ "Other"
+)
+
+groups <- factor(group_labels)
+names(groups) <- seq_names
+table(groups)
+
+# Keep only groups of interest
+keep <- groups %in% c("Korean_Ttrichiura", "T_incognita", "Reference")
+its_aln <- its_aln[keep, ]
+groups  <- droplevels(groups[keep])
+
+# ------------------ 3. Nucleotide diversity (π) --------------
+
+# π within each group
+pi_by_group <- nuc.div(its_aln, groups)
+pi_by_group
+
+# ------------------ 4. Pairwise divergence (Dxy) ------------
+
+# Pairwise distances between all sequences
+# Using "raw" model and pairwise deletion (as in the manuscript)
+dist_mat <- dist.dna(its_aln, model = "raw", pairwise.deletion = TRUE)
+
+# Convert to between-group means (Dxy)
+group_levels <- levels(groups)
+get_Dxy <- function(g1, g2) {
+  ids1 <- names(groups)[groups == g1]
+  ids2 <- names(groups)[groups == g2]
+  mean(dist_mat[ids1, ids2])
+}
+
+# All pairwise group comparisons
+comparisons <- list(
+  c("Korean_Ttrichiura", "T_incognita"),
+  c("Korean_Ttrichiura", "Reference"),
+  c("T_incognita",       "Reference")
+)
+
+dxy_vals <- sapply(comparisons, function(x) get_Dxy(x[1], x[2]))
+names(dxy_vals) <- sapply(comparisons, paste, collapse = " vs ")
+
+dxy_vals
+
+# ------------------ 5. Net divergence (Da) ------------------
+
+# Da = Dxy - (π1 + π2)/2
+get_Da <- function(g1, g2, dxy_val) {
+  pi1 <- pi_by_group[g1]
+  pi2 <- pi_by_group[g2]
+  dxy_val - (pi1 + pi2)/2
+}
+
+da_vals <- mapply(
+  FUN = get_Da,
+  g1  = sapply(comparisons, `[[`, 1),
+  g2  = sapply(comparisons, `[[`, 2),
+  dxy_val = dxy_vals
+)
+
+names(da_vals) <- names(dxy_vals)
+da_vals
+
+# ------------------ 6. Assemble summary table --------------
+
+summary_tbl <- tibble(
+  Comparison = names(dxy_vals),
+  Group1     = sapply(comparisons, `[[`, 1),
+  Group2     = sapply(comparisons, `[[`, 2),
+  Pi_Group1  = pi_by_group[Group1],
+  Pi_Group2  = pi_by_group[Group2],
+  Dxy        = as.numeric(dxy_vals),
+  Da         = as.numeric(da_vals)
+)
+
+print(summary_tbl)
+
+# ------------------ 7. Export table -------------------------
+
+out_file <- "results/Supplementary_Table3_nucleotide_diversity_Dxy_Da.csv"
+dir.create(dirname(out_file), showWarnings = FALSE, recursive = TRUE)
+write_csv(summary_tbl, out_file)
+
+cat("Saved summary table to:", out_file, "\n")
