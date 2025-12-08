@@ -1,8 +1,11 @@
 Trichuris trichiura South Korea β-Tubulin Project
+
 Integrated genomic, phylogenetic, and structural analysis of Trichuris trichiura from South Korea.
-This repository contains scripts, pipelines, and results from β-tubulin variant detection, ITS2 nucleotide diversity analysis, and molecular docking using AutoDock Vina and GNINA (CNN scoring) to investigate benzimidazole drug interactions and potential resistance signatures.
+This repository contains scripts, pipelines, and results from β-tubulin variant detection, ITS2 nucleotide diversity analysis, 
+and molecular docking using AutoDock Vina and GNINA (CNN scoring) to investigate benzimidazole drug interactions and potential resistance signatures.
 
 Project Overview
+
 Human whipworm (T. trichiura) remains an important parasitic infection with growing concern over reduced benzimidazole efficacy.
 This project aims to:
 Characterize β-tubulin variants from Korean clinical isolates
