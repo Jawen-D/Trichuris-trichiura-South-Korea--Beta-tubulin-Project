@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+#
+#Note: make sure you are in the env where docking tools are installed
+#Note: Save as something like run_vina_grid28.sh and make it executable (chmod +x run_vina_grid28.sh)
+#
+# run_vina_grid28.sh
+#
+# Batch-docking wrapper for AutoDock Vina.
+#
+# Directory layout (example):
+#   ROOT/
+#     WT/
+#       ALBZ/
+#         receptor.pdbqt
+#         ligand.pdbqt
+#       MBZ/
+#       OXFZ/
+#     F167Y/
+#       ...
+#
+# For each mutation (WT, F167Y, ...), ligand (ALBZ/MBZ/OXFZ),
+# and seed (default: 1..3), this script:
+#   - runs Vina
+#   - writes pose + log files
+#   - extracts the top affinity and RMSDs
+#   - writes per-ligand, per-mutation, and global CSV summaries
+#
+# Usage:
+#   ./run_vina_grid28.sh [ROOT]
+#
+# Environment overrides:
+#   VINA_BIN, CENTER_X/Y/Z, SIZE_X/Y/Z, EXHAUSTIVENESS, NUM_MODES, EXTRA_ARGS
+#
+# Author: <your name>
+# ---------------------------------------------------------------------
+
+set -euo pipefail
+
+# ----------------------- User knobs ---------------------------------
+
+ROOT="${1:-.}"              # project root containing WT, F167Y, ...
+LIGANDS=(ALBZ MBZ OXFZ)     # ligand subfolders inside each mutation
+SEEDS=(1 2 3)               # seeds per docking
+
+VINA_BIN="${VINA_BIN:-vina}"
+
+#feel free to change these grid coordinates depending on the location of your target canonical pocket
+
+CENTER_X="${CENTER_X:--1.27}"
+CENTER_Y="${CENTER_Y:--9.57}"
+CENTER_Z="${CENTER_Z:-1.26}"
+
+SIZE_X="${SIZE_X:-28}"
+SIZE_Y="${SIZE_Y:-28}"
+SIZE_Z="${SIZE_Z:-28}"
+
+EXHAUSTIVENESS="${EXHAUSTIVENESS:-32}"
+NUM_MODES="${NUM_MODES:-20}"
+EXTRA_ARGS="${EXTRA_ARGS:-}"   # e.g. "--cpu 8"
+
+# --------------------------------------------------------------------
+
+MASTER_CSV="${ROOT%/}/master_summary.csv"
+echo "mutation,ligand,seed,affinity_kcal_mol,rmsd_lb,rmsd_ub,pose_file,folder" > "$MASTER_CSV"
+
+shopt -s nullglob
+
+# ----------------------- Helper functions ---------------------------
+
+# Prefer receptor.pdbqt, otherwise first *receptor*.pdbqt / *_receptor.pdbqt
+pick_receptor() {
+  local d="$1"
+
+  if [[ -s "$d/receptor.pdbqt" ]]; then
+    echo "$d/receptor.pdbqt"
+    return
+  fi
+
+  for f in "$d"/*receptor*.pdbqt "$d"/*_receptor.pdbqt; do
+    [[ -s "$f" ]] && { echo "$f"; return; }
+  done
+
+  echo ""
+}
+
+# Prefer ligand.pdbqt, otherwise first pdbqt that is not receptor/pose/best
+pick_ligand() {
+  local d="$1"
+
+  if [[ -s "$d/ligand.pdbqt" ]]; then
+    echo "$d/ligand.pdbqt"
+    return
+  fi
+
+  for f in "$d"/*.pdbqt; do
+    local base
+    base="$(basename "$f")"
+    [[ "$base" =~ receptor ]] && continue
+    [[ "$base" =~ ^pose_ ]] && continue
+    [[ "$base" == "best_seed.pdbqt" ]] && continue
+    [[ -s "$f" ]] && { echo "$f"; return; }
+  done
+
+  echo ""
+}
+
+# ----------------------- Main loop ----------------------------------
+
+for mut_dir in "$ROOT"/*/; do
+  [[ -d "$mut_dir" ]] || continue
+  mut="$(basename "$mut_dir")"
+
+  # Skip obviously non-mutation folders (dot dirs, OUT, etc.)
+  if ! [[ "$mut" =~ ^[A-Za-z0-9]+$ ]]; then
+    echo "Skipping non-mutation directory: $mut_dir"
+    continue
+  fi
+
+  echo "=== Mutation: $mut ==="
+
+  # Per-mutation summary
+  mkdir -p "$mut_dir/OUT"
+  mut_csv="$mut_dir/OUT/summary_${mut}.csv"
+  echo "mutation,ligand,seed,affinity_kcal_mol,rmsd_lb,rmsd_ub,pose_file,folder" > "$mut_csv"
+
+  for lig in "${LIGANDS[@]}"; do
+    in_dir="$mut_dir/$lig"
+    [[ -d "$in_dir" ]] || { echo "  - Skip (no $lig folder): $in_dir"; continue; }
+
+    rec="$(pick_receptor "$in_dir")"
+    ligf="$(pick_ligand "$in_dir")"
+
+    if [[ -z "$rec" || -z "$ligf" ]]; then
+      echo "  - Skip (missing receptor/ligand) in $in_dir"
+      continue
+    fi
+
+    out_dir="$mut_dir/OUT/$lig"
+    mkdir -p "$out_dir"
+    per_csv="$out_dir/summary.csv"
+    echo "mutation,ligand,seed,affinity_kcal_mol,rmsd_lb,rmsd_ub,pose_file" > "$per_csv"
+
+    echo "  > $mut / $lig   (receptor=$(basename "$rec"), ligand=$(basename "$ligf"))"
+
+    best_aff=+9999
+    best_seed=""
+    best_pose=""
+
+    for seed in "${SEEDS[@]}"; do
+      pose="$out_dir/pose_${mut}_${lig}_seed${seed}.pdbqt"
+      logf="$out_dir/log_${mut}_${lig}_seed${seed}.txt"
+
+      "${VINA_BIN}" \
+        --receptor "$rec" \
+        --ligand   "$ligf" \
+        --center_x "$CENTER_X" --center_y "$CENTER_Y" --center_z "$CENTER_Z" \
+        --size_x   "$SIZE_X"   --size_y   "$SIZE_Y"   --size_z   "$SIZE_Z" \
+        --exhaustiveness "$EXHAUSTIVENESS" \
+        --num_modes      "$NUM_MODES" \
+        --seed "$seed" \
+        --out  "$pose" \
+        --log  "$logf" \
+        $EXTRA_ARGS
+
+      # Parse top score from pose; fallback to log table
+      if head -50 "$pose" | grep -q "REMARK VINA RESULT:"; then
+        read -r aff rmsd_lb rmsd_ub <<<"$(
+          head -50 "$pose" | awk '/REMARK VINA RESULT:/ {print $5, $6, $7; exit}'
+        )"
+      else
+        read -r aff rmsd_lb rmsd_ub <<<"$(
+          awk '/^-----\+/{getline; getline; print $1,$2,$3; exit}' "$logf" \
+          || echo "nan nan nan"
+        )"
+      fi
+
+      echo "$mut,$lig,$seed,$aff,$rmsd_lb,$rmsd_ub,$(basename "$pose")" \
+        >> "$per_csv"
+
+      echo "$mut,$lig,$seed,$aff,$rmsd_lb,$rmsd_ub,$(basename "$pose"),$out_dir" \
+        >> "$MASTER_CSV"
+
+      echo "$mut,$lig,$seed,$aff,$rmsd_lb,$rmsd_ub,$(basename "$pose"),$out_dir" \
+        >> "$mut_csv"
+
+      # Track best (most negative) affinity
+      if [[ "$aff" != "nan" ]] && awk "BEGIN{exit !($aff < $best_aff)}"; then
+        best_aff="$aff"
+        best_seed="$seed"
+        best_pose="$pose"
+      fi
+    done
+
+    # Symlink to best pose per ligand
+    if [[ -n "${best_pose:-}" && -f "$best_pose" ]]; then
+      ln -sf "$(basename "$best_pose")" "$out_dir/best_seed.pdbqt"
+      echo "    Best: $mut/$lig  seed=${best_seed}, affinity=${best_aff} kcal/mol"
+    fi
+
+  done
+done
+
+echo "All done."
+echo "Root summary: $MASTER_CSV"
